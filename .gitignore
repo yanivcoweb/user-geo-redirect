@@ -1,0 +1,16 @@
+# WordPress
+.DS_Store
+thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Dependencies
+node_modules/
+vendor/
+
+# Build files
+*.zip
