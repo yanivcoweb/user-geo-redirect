@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(move /Y user-geo-redirect-new.php user-geo-redirect.php)",
+      "Bash(php -r:*)",
+      "Bash(php -l:*)",
+      "Bash(if [ -d \"C:\\wamp64\\www\\yanivsasson\\wp-content\\plugins\\user-geo-redirect\" ])",
+      "Bash(then echo \"Plugin exists\")",
+      "Bash(else echo \"Plugin not found\")",
+      "Bash(fi)"
+    ]
+  }
+}

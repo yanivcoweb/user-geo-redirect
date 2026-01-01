@@ -1,0 +1,388 @@
+<?php
+/**
+ * Plugin Name:       User Geo Redirect
+ * Plugin URI:        http://yanivsasson.localcom/
+ * Description:       Detects a user's country based on IP and redirects them to a specific URL. Includes AJAX verification to bypass caching issues.
+ * Version:           1.0.0
+ * Author:            Yaniv Sasson
+ * Author URI:        http://yanivsasson.localcom/
+ * License:           GPLv2 or later
+ * License URI:       http://www.gnu.org/licenses/gpl-2.0.html
+ * Text Domain:       user-geo-redirect
+ */
+//error_log('user-geo-redirect.php');
+// Add this at the very top to track loading// At the top of your plugin, replace the current debug definition:if (!defined('GEO_REDIRECT_DEBUG')) {    // Don't log during cron requests    $is_cron = (defined('DOING_CRON') && DOING_CRON) ||                (strpos($_SERVER['REQUEST_URI'] ?? '', 'wp-cron.php') !== false);    define('GEO_REDIRECT_DEBUG', !$is_cron);}if (GEO_REDIRECT_DEBUG) {    error_log('user-geo-redirect.php loaded - ' . $_SERVER['REQUEST_URI']);}
+use GeoIp2\Database\Reader;
+
+// מונע גישה ישירה לקובץ
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+// טוען את הקבצים של Composer
+require_once __DIR__ . '/vendor/autoload.php';
+
+/**
+ * קלאס שמטפל בזיהוי המיקום של המשתמש לפי ה-IP שלו וביצוע ההפניה.
+ */
+final class User_Geo_Redirect {
+
+    /**
+     * @var object המחזיק את המופע היחיד של הקלאס (Singleton).
+     */
+    private static $instance = null;
+
+    /**
+     * @var string הנתיב לקובץ ה-mmdb.
+     */
+    private $database_path;
+
+    /**
+     * @var array מערך הכללים להפניה, המבוסס על קוד מדינה.
+     */
+    private $redirect_rules = [];
+
+    /**
+     * קונסטרוקטור פרטי כדי למנוע יצירת אובייקטים ישירה.
+     */
+    private function __construct() {	    if (GEO_REDIRECT_DEBUG) {			error_log('User_Geo_Redirect - __construct');		}
+        $this->database_path = plugin_dir_path( __FILE__ ) . 'GeoLite2-Country.mmdb';
+        $this->load_redirect_rules();
+        $this->register_hooks();
+    }
+
+    /**
+     * מחזירה את המופע היחיד של הקלאס (תבנית Singleton).
+     *
+     * @return User_Geo_Redirect
+     */
+    public static function instance(): User_Geo_Redirect {	    if (GEO_REDIRECT_DEBUG) {			error_log('User_Geo_Redirect - instance');		}		
+        if ( is_null( self::$instance ) ) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    /**
+     * רושמת את כל ההוקים הנדרשים לתוסף.
+     *
+     * @return void
+     */
+    private function register_hooks(): void {	    if (GEO_REDIRECT_DEBUG) {			error_log('User_Geo_Redirect - register_hooks');		}						
+        // add_shortcode( 'user_country', [ $this, 'display_country_shortcode' ] );
+        add_action( 'init', [ $this, 'geo_redirect' ] );
+        // add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
+        // add_action( 'wp_ajax_verify_country', [ $this, 'ajax_verify_country' ] );
+        // add_action( 'wp_ajax_nopriv_verify_country', [ $this, 'ajax_verify_country' ] );		
+
+        if ( is_multisite() ) {
+            add_action( 'network_admin_menu', [ $this, 'add_network_admin_menu' ] );
+            add_action( 'network_admin_edit_ugr_save_settings', [ $this, 'save_network_settings' ] );
+        }
+    }
+
+    /**
+     * מבצע את ההפניה הראשונית בטעינת הדף.
+     *
+     * @return void
+     */
+    public function geo_redirect(): void {
+		if (GEO_REDIRECT_DEBUG) {			error_log('User_Geo_Redirect - geo_redirect');		}		// Get the current full URL		$current_url = ( ( isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ) ? 'https' : 'http' );		$current_url .= '://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];		// Remove query string and fragment		$current_url_no_query = strtok($current_url, '?#');		// Normalize both URLs (remove trailing slashes for consistency)		$current_url_no_query = untrailingslashit($current_url_no_query);		$home_url_normalized  = untrailingslashit( home_url('/') );				error_log('$current_url_no_query:'.$current_url_no_query);		error_log('$home_url_normalized:'.$home_url_normalized);				if ( $current_url_no_query === $home_url_normalized ) {			
+			$user_country_code = $this->get_country_code_from_ip( $this->get_user_ip() );
+			$redirect_url = $this->get_redirect_url( $user_country_code );
+			error_log('$redirect_url:'.$redirect_url);			// בודק אם יש כתובת הפניה ושהיא שונה מהנוכחית.			if ( ! $redirect_url || $current_url_no_query === $redirect_url ) {				return;			}						
+			if ( $redirect_url ) {				
+				error_log('$redirect_url:'.$redirect_url);
+				error_log($redirect_url);								// Preserve GET parameters from current request				$query_args = $_GET;							// Add the custom parameter				$query_args['geo_redirected'] = 1;				// Add all query args to the redirect URL				$redirect_url = add_query_arg( $query_args, $redirect_url );								// שלושה חודשים בשניות				$three_months_in_seconds = 3 * MONTH_IN_SECONDS; 				// הגדרת העוגייה				// setcookie( 'user_geo_redirected_03', '1', time() + $three_months_in_seconds, '/' );
+				wp_redirect( $redirect_url, 302 );
+				exit;
+			}		}
+    }
+
+    /**
+     * מטעין את הסקריפטים והסגנונות של התוסף.
+     *
+     * @return void
+     */
+	public function enqueue_scripts(): void {	    if (GEO_REDIRECT_DEBUG) {			error_log('User_Geo_Redirect - enqueue_scripts');		}					/*
+        if ( is_admin() ) {
+            return;
+        }
+
+        wp_enqueue_script( 'user-geo-ajax', plugin_dir_url( __FILE__ ) . 'assets/user-geo.js', ['jquery'], '1.0', true );
+        wp_localize_script( 'user-geo-ajax', 'user_geo_vars', [
+            'ajax_url' => admin_url( 'admin-ajax.php' ),
+            'initial_country_code' => $this->get_country_code_from_ip( $this->get_user_ip() ),
+			]);		*/
+    }
+
+    /**
+     * פונקציה שמטפלת בקריאת AJAX ומחזירה את קוד המדינה.
+     *
+     * @return void
+     */
+    public function ajax_verify_country(): void {	    if (GEO_REDIRECT_DEBUG) {			error_log('User_Geo_Redirect - ajax_verify_country');		}			/*
+		$country_code = $this->get_country_code_from_ip( $this->get_user_ip() );
+        wp_send_json_success( [ 'country_code' => $country_code ] );
+        wp_die();		*/
+    }
+
+    /**
+     * משיגה את כתובת ה-IP של המשתמש בצורה מאובטחת.
+     *
+     * @return string|false
+     */
+    private function get_user_ip(): string|false {	    if (GEO_REDIRECT_DEBUG) {			error_log('User_Geo_Redirect - get_user_ip');		}			
+        $ip = false;
+        if ( isset( $_SERVER['HTTP_CLIENT_IP'] ) ) {
+            $ip = sanitize_text_field( $_SERVER['HTTP_CLIENT_IP'] );
+        } elseif ( isset( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
+            $ip = sanitize_text_field( $_SERVER['HTTP_X_FORWARDED_FOR'] );
+        } elseif ( isset( $_SERVER['REMOTE_ADDR'] ) ) {
+            $ip = sanitize_text_field( $_SERVER['REMOTE_ADDR'] );
+        }
+        return $ip;		
+    }
+
+    /**
+     * מחלצת את קוד המדינה מתוך קובץ ה-GeoLite2.
+     *
+     * @param string $ip כתובת ה-IP של המשתמש.
+     * @return string|null
+     */
+    private function get_country_code_from_ip( string $ip ): ?string {	    if (GEO_REDIRECT_DEBUG) {			error_log('User_Geo_Redirect - get_country_code_from_ip');		}			
+        try {
+            $reader = new Reader( $this->database_path );
+            $record = $reader->country( $ip );
+            return $record->country->isoCode;
+        } catch ( \Exception $e ) {
+            return null;
+        }		
+    }
+
+    /**
+     * מוצאת את כתובת ההפניה המתאימה לפי קוד המדינה.
+     *
+     * @param string|null $country_code קוד המדינה של המשתמש.
+     * @return string|null
+     */
+    private function get_redirect_url( ?string $country_code ): ?string {	    if (GEO_REDIRECT_DEBUG) {			error_log('User_Geo_Redirect - get_redirect_url');		}			
+        if ( isset( $this->redirect_rules[ $country_code ] ) ) {
+            return $this->redirect_rules[ $country_code ];
+        }
+        return $this->redirect_rules['*'] ?? null;		
+    }
+
+    /**
+     * פונקציית הקוד הקצר (shortcode) שמציגה את שם המדינה.
+     *
+     * @return string
+     */
+		/*
+	public function display_country_shortcode(): string {	    if (GEO_REDIRECT_DEBUG) {			error_log('User_Geo_Redirect - display_country_shortcode');		}			        $user_ip = $this->get_user_ip();
+        if ( ! $user_ip ) {
+            return '';
+        }
+        $country_code = $this->get_country_code_from_ip( $user_ip );
+        return $country_code ?? '';    }
+		*/
+
+    /**
+     * טוען את כללי ההפניה מההגדרות של הרשת.
+     *
+     * @return void
+     */
+    private function load_redirect_rules(): void {
+        $saved_rules = get_site_option( 'ugr_redirect_rules', [] );
+
+        if ( ! empty( $saved_rules ) && is_array( $saved_rules ) ) {
+            $this->redirect_rules = $saved_rules;
+        }
+    }
+
+    /**
+     * מוסיף תפריט לניהול רשת.
+     *
+     * @return void
+     */
+    public function add_network_admin_menu(): void {
+        add_menu_page(
+            'Geo Redirect Settings',
+            'Geo Redirect',
+            'manage_network_options',
+            'user-geo-redirect',
+            [ $this, 'render_admin_page' ],
+            'dashicons-admin-site-alt3',
+            30
+        );
+    }
+
+    /**
+     * מציג את דף הניהול.
+     *
+     * @return void
+     */
+    public function render_admin_page(): void {
+        if ( ! current_user_can( 'manage_network_options' ) ) {
+            wp_die( 'You do not have permission to access this page.' );
+        }
+
+        $sites = get_sites();
+        $saved_rules = get_site_option( 'ugr_redirect_rules', [] );
+
+        ?>
+        <div class="wrap">
+            <h1>User Geo Redirect Settings</h1>
+
+            <form method="post" action="edit.php?action=ugr_save_settings">
+                <?php wp_nonce_field( 'ugr_save_settings_nonce' ); ?>
+
+                <table class="wp-list-table widefat fixed striped" id="ugr-rules-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40%;">Site</th>
+                            <th style="width: 50%;">Countries (comma-separated ISO codes or * for all)</th>
+                            <th style="width: 10%;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ugr-rules-body">
+                        <?php
+                        if ( ! empty( $saved_rules ) ) :
+                            foreach ( $saved_rules as $site_url => $countries_string ) :
+                                ?>
+                                <tr>
+                                    <td>
+                                        <select name="ugr_rules[site][]" class="regular-text" required>
+                                            <option value="">Select a site...</option>
+                                            <?php foreach ( $sites as $site ) :
+                                                $site_url_option = untrailingslashit( get_site_url( $site->blog_id ) );
+                                            ?>
+                                                <option value="<?php echo esc_attr( $site_url_option ); ?>" <?php selected( $site_url, $site_url_option ); ?>>
+                                                    <?php echo esc_html( $site_url_option ); ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <input type="text" name="ugr_rules[countries][]" value="<?php echo esc_attr( $countries_string ); ?>" class="regular-text" placeholder="IL,IT,PE or *" required />
+                                        <p class="description">Use ISO 2-letter country codes (e.g., IL,IT,PE) or * for all countries</p>
+                                    </td>
+                                    <td>
+                                        <button type="button" class="button ugr-remove-rule">Remove</button>
+                                    </td>
+                                </tr>
+                                <?php
+                            endforeach;
+                        endif;
+                        ?>
+                    </tbody>
+                </table>
+
+                <p>
+                    <button type="button" id="ugr-add-rule" class="button">Add New Rule</button>
+                </p>
+
+                <p class="submit">
+                    <input type="submit" name="submit" id="submit" class="button button-primary" value="Save Settings">
+                </p>
+            </form>
+        </div>
+
+        <script type="text/javascript">
+        jQuery(document).ready(function($) {
+            var siteOptions = <?php
+                $options_array = [];
+                foreach ( $sites as $site ) {
+                    $site_url_option = untrailingslashit( get_site_url( $site->blog_id ) );
+                    $options_array[] = [
+                        'value' => $site_url_option,
+                        'text' => $site_url_option
+                    ];
+                }
+                echo json_encode( $options_array );
+            ?>;
+
+            $('#ugr-add-rule').on('click', function() {
+                var optionsHtml = '<option value="">Select a site...</option>';
+                $.each(siteOptions, function(i, opt) {
+                    optionsHtml += '<option value="' + opt.value + '">' + opt.text + '</option>';
+                });
+
+                var newRow = '<tr>' +
+                    '<td><select name="ugr_rules[site][]" class="regular-text" required>' + optionsHtml + '</select></td>' +
+                    '<td><input type="text" name="ugr_rules[countries][]" value="" class="regular-text" placeholder="IL,IT,PE or *" required />' +
+                    '<p class="description">Use ISO 2-letter country codes (e.g., IL,IT,PE) or * for all countries</p></td>' +
+                    '<td><button type="button" class="button ugr-remove-rule">Remove</button></td>' +
+                    '</tr>';
+
+                $('#ugr-rules-body').append(newRow);
+            });
+
+            $(document).on('click', '.ugr-remove-rule', function() {
+                $(this).closest('tr').remove();
+            });
+        });
+        </script>
+
+        <style>
+        #ugr-rules-table td {
+            vertical-align: top;
+            padding: 15px 10px;
+        }
+        #ugr-rules-table select,
+        #ugr-rules-table input[type="text"] {
+            width: 100%;
+        }
+        .description {
+            margin-top: 5px;
+            font-size: 12px;
+        }
+        </style>
+        <?php
+    }
+
+    /**
+     * שומר את ההגדרות של הרשת.
+     *
+     * @return void
+     */
+    public function save_network_settings(): void {
+        if ( ! current_user_can( 'manage_network_options' ) ) {
+            wp_die( 'You do not have permission to perform this action.' );
+        }
+
+        check_admin_referer( 'ugr_save_settings_nonce' );
+
+        $redirect_rules = [];
+
+        if ( isset( $_POST['ugr_rules']['site'] ) && isset( $_POST['ugr_rules']['countries'] ) ) {
+            $sites = $_POST['ugr_rules']['site'];
+            $countries = $_POST['ugr_rules']['countries'];
+
+            for ( $i = 0; $i < count( $sites ); $i++ ) {
+                if ( ! empty( $sites[ $i ] ) && ! empty( $countries[ $i ] ) ) {
+                    $site_url = esc_url_raw( $sites[ $i ] );
+                    $countries_string = sanitize_text_field( $countries[ $i ] );
+
+                    $countries_array = array_map( 'trim', explode( ',', $countries_string ) );
+
+                    foreach ( $countries_array as $country_code ) {
+                        if ( $country_code === '*' || preg_match( '/^[A-Z]{2}$/i', $country_code ) ) {
+                            $redirect_rules[ strtoupper( $country_code ) ] = $site_url;
+                        }
+                    }
+                }
+            }
+        }
+
+        update_site_option( 'ugr_redirect_rules', $redirect_rules );
+
+        wp_redirect( add_query_arg(
+            [ 'page' => 'user-geo-redirect', 'updated' => 'true' ],
+            network_admin_url( 'admin.php' )
+        ) );
+        exit;
+    }
+}
+
+// יוזמים את הקלאס כשכל התוספים טעוניםadd_action( 'plugins_loaded', function() {		$is_home = false;	// Get the current full URL	$current_url = ( ( isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ) ? 'https' : 'http' );	$current_url .= '://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];	// Remove query string and fragment	$current_url_no_query = strtok($current_url, '?#');	// Normalize both URLs (remove trailing slashes for consistency)	$current_url_no_query = untrailingslashit($current_url_no_query);	$home_url_normalized  = untrailingslashit( home_url('/') );		error_log('plugins_loaded - $current_url_no_query:'.$current_url_no_query);	error_log('plugins_loaded - $home_url_normalized:'.$home_url_normalized);		if ( $current_url_no_query === $home_url_normalized ) {		if ( 				is_admin() || 				is_user_logged_in() ||				// isset( $_COOKIE['user_geo_redirected_03'] ) ||				isset( $_GET['geo_redirected'] ) ||								wp_doing_ajax() || 				wp_doing_cron() || 				(defined('DOING_CRON') && DOING_CRON) ||				(defined('REST_REQUEST') && REST_REQUEST) ||				(defined('WP_CLI') && WP_CLI) 			) 		{  					return;					}else{						if (GEO_REDIRECT_DEBUG) {				error_log('plugins_loaded - initializing User_Geo_Redirect');			}			User_Geo_Redirect::instance();					}	}else{		error_log('plugins_loaded - not home');	}} );
