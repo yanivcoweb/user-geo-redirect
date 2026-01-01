@@ -1,16 +1,21 @@
-# Ignore Composer vendor dependencies
-/vendor/
-
-# Ignore MaxMind database
-/GeoLite2-Country.mmdb
-
-# Ignore OS and editor files
-.DS_Store
-Thumbs.db
-*.zip
-*.log
-*.tmp
-
-# Ignore IDE folders
-.vscode/
+# Ignore Composer vendor dependencies
+/vendor/
+
+# Ignore MaxMind database
+/GeoLite2-Country.mmdb
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+*.zip
+*.log
+*.tmp
+
+# IDE folders
+.vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace
+
+# Dependencies
+node_modules/
