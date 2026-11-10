@@ -4,6 +4,7 @@
  * Plugin URI:        https://coweb.co.il/
  * Description:       Detects a user's country based on IP and redirects them to a specific URL. Includes AJAX verification to bypass caching issues.
  * Version:           1.0.0
+ * Requires PHP:      8.0
  * Author:            Yaniv Sasson
  * Author URI:        https://yanivsasson.com/
  * License:           GPLv2 or later
@@ -11,24 +12,32 @@
  * Text Domain:       user-geo-redirect
  */
 
-// Define debug constant
-if (!defined('GEO_REDIRECT_DEBUG')) {
-    // Don't log during cron requests
-    $is_cron = (defined('DOING_CRON') && DOING_CRON) ||
-                (strpos($_SERVER['REQUEST_URI'] ?? '', 'wp-cron.php') !== false);
-    define('GEO_REDIRECT_DEBUG', !$is_cron);
-}
-
-if (GEO_REDIRECT_DEBUG) {
-    error_log('user-geo-redirect.php loaded - ' . $_SERVER['REQUEST_URI']);
-}
-
 use GeoIp2\Database\Reader;
 
 // מונע גישה ישירה לקובץ
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
+
+// Debug logging is off by default. To turn it on, add this to wp-config.php:
+// define( 'GEO_REDIRECT_DEBUG', true );
+if ( ! defined( 'GEO_REDIRECT_DEBUG' ) ) {
+    define( 'GEO_REDIRECT_DEBUG', false );
+}
+
+/**
+ * Writes a message to the PHP error log, only when GEO_REDIRECT_DEBUG is true.
+ *
+ * @param string $message
+ * @return void
+ */
+function ugr_debug_log( string $message ): void {
+    if ( GEO_REDIRECT_DEBUG ) {
+        error_log( '[user-geo-redirect] ' . $message );
+    }
+}
+
+ugr_debug_log( 'loaded - ' . ( $_SERVER['REQUEST_URI'] ?? '' ) );
 
 // טוען את הקבצים של Composer
 require_once __DIR__ . '/vendor/autoload.php';
@@ -112,14 +121,14 @@ final class User_Geo_Redirect {
         if ( !session_id() && !headers_sent() ) {
             // Configure session to work across all subdomains
             $host = $_SERVER['HTTP_HOST'] ?? '';
-            // Extract root domain (e.g., webdevtest.co.il from he.webdevtest.co.il)
+            // Extract root domain (e.g., example.co.il from he.example.co.il)
             // For multi-level TLDs like .co.il, we need to handle them properly
             $domain_parts = explode('.', $host);
             if (count($domain_parts) >= 4) {
-                // e.g., he.webdevtest.co.il -> .webdevtest.co.il (last 3 parts)
+                // e.g., he.example.co.il -> .example.co.il (last 3 parts)
                 $session_domain = '.' . $domain_parts[count($domain_parts) - 3] . '.' . $domain_parts[count($domain_parts) - 2] . '.' . $domain_parts[count($domain_parts) - 1];
             } elseif (count($domain_parts) == 3) {
-                // e.g., webdevtest.co.il -> .webdevtest.co.il
+                // e.g., example.co.il -> .example.co.il
                 $session_domain = '.' . $host;
             } else {
                 // e.g., localhost or example.com -> .localhost or .example.com
@@ -154,23 +163,20 @@ final class User_Geo_Redirect {
             error_log('User_Geo_Redirect - geo_redirect');
         }
 
-        // Log all cookies for debugging
-        error_log('All cookies at start: ' . print_r($_COOKIE, true));
-
         // If user was just redirected (has geo_redirected parameter), set cookie and skip
         // This must happen BEFORE any other checks
         if ( isset( $_GET['geo_redirected'] ) ) {
-            error_log('User has geo_redirected parameter, setting cookie and skipping redirect');
+            ugr_debug_log('User has geo_redirected parameter, setting cookie and skipping redirect');
             $thirty_days = 30 * DAY_IN_SECONDS;
             $host = $_SERVER['HTTP_HOST'] ?? '';
-            // Extract root domain (e.g., webdevtest.co.il from he.webdevtest.co.il)
+            // Extract root domain (e.g., example.co.il from he.example.co.il)
             // For multi-level TLDs like .co.il, we need to handle them properly
             $domain_parts = explode('.', $host);
             if (count($domain_parts) >= 4) {
-                // e.g., he.webdevtest.co.il -> .webdevtest.co.il (last 3 parts)
+                // e.g., he.example.co.il -> .example.co.il (last 3 parts)
                 $cookie_domain = '.' . $domain_parts[count($domain_parts) - 3] . '.' . $domain_parts[count($domain_parts) - 2] . '.' . $domain_parts[count($domain_parts) - 1];
             } elseif (count($domain_parts) == 3) {
-                // e.g., webdevtest.co.il -> .webdevtest.co.il
+                // e.g., example.co.il -> .example.co.il
                 $cookie_domain = '.' . $host;
             } else {
                 // e.g., localhost or example.com -> .localhost or .example.com
@@ -187,7 +193,7 @@ final class User_Geo_Redirect {
                 'samesite' => 'Lax'
             ]);
 
-            error_log('Cookie set for domain: ' . $cookie_domain . ' (success: ' . ($cookie_set ? 'yes' : 'no') . ')');
+            ugr_debug_log('Cookie set for domain: ' . $cookie_domain . ' (success: ' . ($cookie_set ? 'yes' : 'no') . ')');
 
             // Also set $_COOKIE immediately for this request
             $_COOKIE['user_geo_redirected'] = '1';
@@ -197,7 +203,7 @@ final class User_Geo_Redirect {
         // Check if user has already been redirected (cookie check)
         // This check should happen BEFORE checking if on homepage
         if ( isset( $_COOKIE['user_geo_redirected'] ) ) {
-            error_log('User already redirected (cookie found), skipping redirect');
+            ugr_debug_log('User already redirected (cookie found), skipping redirect');
             return;
         }
 
@@ -212,25 +218,24 @@ final class User_Geo_Redirect {
         $home_url_normalized  = untrailingslashit( home_url('/') );
         $home_url_normalized  = str_replace('://www.', '://', $home_url_normalized);
 
-        error_log('$current_url_no_query:'.$current_url_no_query);
-        error_log('$home_url_normalized:'.$home_url_normalized);
+        ugr_debug_log('$current_url_no_query:'.$current_url_no_query);
+        ugr_debug_log('$home_url_normalized:'.$home_url_normalized);
 
         if ( $current_url_no_query === $home_url_normalized ) {
 
             $user_ip = $this->get_user_ip();
-            error_log('User IP: ' . $user_ip);
+            ugr_debug_log('User IP: ' . $user_ip);
             $user_country_code = $this->get_country_code_from_ip( $user_ip );
-            error_log('Detected country code: ' . ($user_country_code ?? 'NULL'));
+            ugr_debug_log('Detected country code: ' . ($user_country_code ?? 'NULL'));
             $redirect_url = $this->get_redirect_url( $user_country_code );
-            error_log('Redirect URL for country ' . ($user_country_code ?? 'NULL') . ': ' . ($redirect_url ?? 'NULL'));
+            ugr_debug_log('Redirect URL for country ' . ($user_country_code ?? 'NULL') . ': ' . ($redirect_url ?? 'NULL'));
             // בודק אם יש כתובת הפניה ושהיא שונה מהנוכחית.
             if ( ! $redirect_url || $current_url_no_query === $redirect_url ) {
                 return;
             }
 
             if ( $redirect_url ) {
-                error_log('$redirect_url:'.$redirect_url);
-                error_log($redirect_url);
+                ugr_debug_log('$redirect_url:'.$redirect_url);
                 // Set session immediately before redirect
                 $_SESSION['user_geo_redirected'] = '1';
                 // Preserve GET parameters from current request
@@ -243,21 +248,21 @@ final class User_Geo_Redirect {
                 // Cookie domain: use the root domain to work across all subdomains
                 $thirty_days = 30 * DAY_IN_SECONDS;
                 $host = $_SERVER['HTTP_HOST'] ?? '';
-                // Extract root domain (e.g., webdevtest.co.il from he.webdevtest.co.il)
+                // Extract root domain (e.g., example.co.il from he.example.co.il)
                 // For multi-level TLDs like .co.il, we need to handle them properly
                 $domain_parts = explode('.', $host);
                 if (count($domain_parts) >= 4) {
-                    // e.g., he.webdevtest.co.il -> .webdevtest.co.il (last 3 parts)
+                    // e.g., he.example.co.il -> .example.co.il (last 3 parts)
                     $cookie_domain = '.' . $domain_parts[count($domain_parts) - 3] . '.' . $domain_parts[count($domain_parts) - 2] . '.' . $domain_parts[count($domain_parts) - 1];
                 } elseif (count($domain_parts) == 3) {
-                    // e.g., webdevtest.co.il -> .webdevtest.co.il
+                    // e.g., example.co.il -> .example.co.il
                     $cookie_domain = '.' . $host;
                 } else {
                     // e.g., localhost or example.com -> .localhost or .example.com
                     $cookie_domain = '.' . $host;
                 }
                 setcookie( 'user_geo_redirected', '1', time() + $thirty_days, '/', $cookie_domain, false, true );
-                error_log('Performing redirect with session and cookie set');
+                ugr_debug_log('Performing redirect with session and cookie set');
                 wp_redirect( $redirect_url, 302 );
                 exit;
             }
@@ -340,7 +345,7 @@ final class User_Geo_Redirect {
         if ( isset( $_GET['test_country'] ) && ($is_localhost || current_user_can( 'manage_network_options' )) ) {
             $test_country = strtoupper( sanitize_text_field( $_GET['test_country'] ) );
             if ( $test_country === '*' || preg_match( '/^[A-Z]{2}$/', $test_country ) ) {
-                error_log( 'Testing mode: Using country code ' . $test_country );
+                ugr_debug_log( 'Testing mode: Using country code ' . $test_country );
                 return $test_country;
             }
         }
@@ -350,7 +355,7 @@ final class User_Geo_Redirect {
             $record = $reader->country( $ip );
             return $record->country->isoCode;
         } catch ( \Exception $e ) {
-            error_log( 'GeoIP Error: ' . $e->getMessage() );
+            ugr_debug_log( 'GeoIP Error: ' . $e->getMessage() );
             return null;
         }
     }
@@ -512,6 +517,17 @@ final class User_Geo_Redirect {
         <div class="wrap">
             <h1>User Geo Redirect Settings</h1>
 
+            <?php if ( ! is_readable( $this->database_path ) ) : ?>
+                <div class="notice notice-error">
+                    <p>
+                        <strong>GeoLite2-Country.mmdb was not found.</strong>
+                        Download it from <a href="https://dev.maxmind.com/geoip/geolite2-free-geolocation-data" target="_blank" rel="noopener noreferrer">MaxMind</a>
+                        and place it in <code><?php echo esc_html( plugin_dir_path( __FILE__ ) ); ?></code>.
+                        Without it, visitors are not matched to a country.
+                    </p>
+                </div>
+            <?php endif; ?>
+
             <form method="post" action="edit.php?action=ugr_save_settings">
                 <?php wp_nonce_field( 'ugr_save_settings_nonce' ); ?>
 
@@ -611,8 +627,8 @@ final class User_Geo_Redirect {
                     <h4>1. Setup Your Redirect Rules</h4>
                     <p>First, add some test rules above. For example:</p>
                     <ul>
-                        <li>Site: <code>http://yanivsasson.local</code> → Countries: <code>IL,IT,PE</code></li>
-                        <li>Site: <code>http://yanivsasson.localcom</code> → Countries: <code>*</code></li>
+                        <li>Site: <code>https://il.example.com</code> → Countries: <code>IL,IT,PE</code></li>
+                        <li>Site: <code>https://en.example.com</code> → Countries: <code>*</code></li>
                     </ul>
 
                     <h4>2. Testing with URL Parameter (Easiest Method)</h4>
@@ -623,13 +639,13 @@ final class User_Geo_Redirect {
                         <li>Log in as network admin</li>
                         <li>Visit your homepage with a test country parameter:
                             <ul>
-                                <li>Test Israel redirect: <code>http://yanivsasson.local/?test_country=IL</code></li>
-                                <li>Test Italy redirect: <code>http://yanivsasson.local/?test_country=IT</code></li>
-                                <li>Test Peru redirect: <code>http://yanivsasson.local/?test_country=PE</code></li>
-                                <li>Test wildcard (all other countries): <code>http://yanivsasson.local/?test_country=US</code></li>
+                                <li>Test Israel redirect: <code>https://example.com/?test_country=IL</code></li>
+                                <li>Test Italy redirect: <code>https://example.com/?test_country=IT</code></li>
+                                <li>Test Peru redirect: <code>https://example.com/?test_country=PE</code></li>
+                                <li>Test wildcard (all other countries): <code>https://example.com/?test_country=US</code></li>
                             </ul>
                         </li>
-                        <li>Check the debug log at <code>C:\wamp64\www\yanivsasson\wp-content\debug.log</code> to see what's happening</li>
+                        <li>Turn on debug logging (see step 4) and check <code>wp-content/debug.log</code> to see what's happening</li>
                     </ol>
 
                     <h4>3. Testing with VPN (Real-World Test)</h4>
@@ -641,12 +657,17 @@ final class User_Geo_Redirect {
                     </ol>
 
                     <h4>4. Check Debug Logs</h4>
-                    <p>Your plugin has debug logging enabled. Check <code>C:\wamp64\www\yanivsasson\wp-content\debug.log</code> to see:</p>
+                    <p>Debug logging is off by default. To turn it on, add these lines to <code>wp-config.php</code>:</p>
+                    <pre><code>define( 'WP_DEBUG', true );
+define( 'WP_DEBUG_LOG', true );
+define( 'GEO_REDIRECT_DEBUG', true );</code></pre>
+                    <p>Then check <code>wp-content/debug.log</code> to see:</p>
                     <ul>
                         <li>What country was detected</li>
                         <li>What redirect URL was determined</li>
                         <li>Whether redirect happened</li>
                     </ul>
+                    <p class="description">The log includes visitor IP addresses. Turn <code>GEO_REDIRECT_DEBUG</code> off again when you are done.</p>
 
                     <h4>Important Testing Notes:</h4>
                     <ul>
@@ -956,8 +977,8 @@ add_action( 'plugins_loaded', function() {
 	$home_url_normalized  = untrailingslashit( home_url('/') );
 	$home_url_normalized  = str_replace('://www.', '://', $home_url_normalized);
 
-	error_log('plugins_loaded - $current_url_no_query:'.$current_url_no_query);
-	error_log('plugins_loaded - $home_url_normalized:'.$home_url_normalized);
+	ugr_debug_log('plugins_loaded - $current_url_no_query:'.$current_url_no_query);
+	ugr_debug_log('plugins_loaded - $home_url_normalized:'.$home_url_normalized);
 
 	if ( $current_url_no_query === $home_url_normalized ) {
 		if (
@@ -978,7 +999,7 @@ add_action( 'plugins_loaded', function() {
 			User_Geo_Redirect::instance();
 		}
 	} else {
-		error_log('plugins_loaded - not home');
+		ugr_debug_log('plugins_loaded - not home');
 	}
 } );
 
