@@ -1,8 +1,9 @@
 # Ignore Composer vendor dependencies
 /vendor/
 
-# Ignore MaxMind database
+# Ignore MaxMind databases (licence does not allow redistribution)
 /GeoLite2-Country.mmdb
+*.mmdb
 
 # OS and editor files
 .DS_Store
@@ -19,3 +20,8 @@ Thumbs.db
 
 # Dependencies
 node_modules/
+
+# Local tool settings and backups
+.claude/settings.local.json
+*.backup
+*.bak
