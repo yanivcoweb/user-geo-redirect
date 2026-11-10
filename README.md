@@ -1,10 +1,16 @@
 # User Geo Redirect
 
+> **This plugin has been merged into
+> [CoWeb User Geo Redirect](https://github.com/yanivcoweb/coweb-user-geo-redirect),
+> which works on single sites and multisite networks. This repository is
+> archived and no longer maintained.** To move over, follow
+> [Upgrading from User Geo Redirect](https://github.com/yanivcoweb/coweb-user-geo-redirect#upgrading-from-pw-user-geo-or-user-geo-redirect).
+
 A WordPress **multisite** plugin that sends first-time visitors from the
 network's homepage to the site that matches their country. Country detection
 uses a local MaxMind GeoLite2-Country database, so no external API is called.
 
-> Status: in development. There is no packaged release yet.
+> Status: never released. Superseded by CoWeb User Geo Redirect.
 
 ## How it works
 
